@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (lint + tests on PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fintrace
+          POSTGRES_PASSWORD: fintrace-ci-only
+          POSTGRES_DB: fintrace_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fintrace"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      FINTRACE_TEST_DATABASE_URL: postgresql+psycopg://fintrace:fintrace-ci-only@localhost:5432/fintrace_test
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/pyproject.toml
+            ml/pyproject.toml
+      - name: Install (backend uses the shared feature code from ml/)
+        run: pip install -e ../ml -e ".[dev]"
+      - name: Lint
+        run: ruff check . && ruff check --config pyproject.toml ../scripts
+      - name: Format check
+        run: ruff format --check . && ruff format --check --config pyproject.toml ../scripts
+      - name: Tests
+        run: pytest --cov=app --cov-report=term-missing
+      - name: OpenAPI schema for the frontend is up to date
+        run: |
+          python ../scripts/export_openapi.py
+          git diff --exit-code ../frontend/openapi.json || (echo "Run: python scripts/export_openapi.py && cd frontend && npm run gen:api" && exit 1)
+
+  ml:
+    name: ML pipeline (lint + tests on the synthetic sample)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ml/pyproject.toml
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check . && ruff format --check .
+      - name: Tests
+        run: pytest
+      - name: End-to-end smoke run (synthetic data, not results)
+        run: python -m fintrace_ml.train ../data/sample/synthetic_transactions.csv --data-kind synthetic --out /tmp/artifacts
+
+  frontend:
+    name: Frontend (types, lint, tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Generated API types match openapi.json
+        run: npm run gen:api && git diff --exit-code src/api/schema.d.ts
+      - name: Type check
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Tests
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: Docker Compose (build, start, demo seed, smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: CI-only configuration (throwaway values, never real secrets)
+        run: |
+          cp .env.example .env
+          sed -i \
+            -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=ci-only-db-password|" \
+            -e "s|^FINTRACE_JWT_SECRET=.*|FINTRACE_JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')|" \
+            -e "s|^FINTRACE_DEMO_PASSWORD=.*|FINTRACE_DEMO_PASSWORD=ci-only-demo-password|" \
+            .env
+      - name: Build and start the stack
+        run: docker compose up -d --build --wait
+      - name: Demo seed (twice, to check it is idempotent)
+        run: |
+          docker compose exec -T api python -m app.cli demo-seed
+          docker compose exec -T api python -m app.cli demo-seed | tee second-run.txt
+          grep -q "created 0 alerts" second-run.txt
+      - name: Smoke test through the web proxy
+        run: |
+          curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+          curl -fsS http://localhost:8080/cases/1 | grep -q '<div id="root">'
+          curl -fsS -D - -o /dev/null http://localhost:8080/ | grep -qi 'content-security-policy'
+          curl -fsS http://localhost:8080/api/v1/health/ready | tee ready.json
+          token=$(curl -fsS -X POST http://localhost:8080/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"demo.analyst@example.com","password":"ci-only-demo-password"}' \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          curl -fsS -H "Authorization: Bearer $token" http://localhost:8080/api/v1/metrics/overview \
+            | python3 -c 'import json,sys; o=json.load(sys.stdin); assert o["transactions_total"]==5000, o; assert o["active_model"]["is_synthetic_demo"], o; print("overview ok:", o["alerts_total"], "alerts")'
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop
+        if: always()
+        run: docker compose down -v

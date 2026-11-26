@@ -1,0 +1,76 @@
+# FinTrace — Requirements Checklist
+
+Legend: ✅ verified (test or command actually run) · 🟡 implemented, not yet verified · ⬜ not started · ⛔ blocked
+
+Last updated: 2026-10-13 (admin screens after Phase 6)
+
+## Product
+| Req | Status | Verified by |
+|---|---|---|
+| Import validated CSV files | ✅ | AT-05, AT-06: `test_imports.py` (row-level errors, header checks, size limit, UTF-8) |
+| Accept transactions via REST API | ✅ | `test_transactions.py` (idempotent by external_id, validation, 1000-row cap) |
+| Store transactions in PostgreSQL | ✅ | `test_valid_csv_is_imported`, `test_schema.py` constraints |
+| Configurable monitoring rules | ✅ | AT-10 `test_tuning_a_rule_changes_alert_outcomes`, `test_rule_types`, `test_invalid_parameters_are_rejected` |
+| Supervised ML model on labelled synthetic data | ✅ | Trained on full PaySim; docs/MODEL_REPORT.md |
+| Persist risk assessments (version, time, score, reasons) | ✅ | AT-09 `test_assessment_is_persisted_with_version_time_score_and_reasons`; parity `test_online_scores_match_offline_pipeline` |
+| Alerts: filter, assign, change status | ✅ | AT-11 `test_alerts.py` (filters, sorting, permissions, transitions, audit) |
+| Cases: link alerts, notes, decisions | ✅ | AT-12 `test_cases.py` (one case per alert, own-case rules, closing needs a senior decision with rationale, closed cases final, append-only notes) |
+| Audit events for sensitive changes | ✅ | AT-13: users, imports, ingestion, rule edits, model registration/activation, scoring, alert and case changes audited (tests in each file); `GET /audit-events` for seniors (`test_audit_and_metrics.py`) |
+| React dashboard (transactions, alerts, cases, metrics) | ✅ | AT-16: `npm run typecheck`, `lint`, `test` (14 tests), `build`; scripted click-through against 200k PaySim rows (Phase 5) and through the Docker stack (Phase 6), 15 steps each, with no console errors or failed API calls |
+| Reproducible training and evaluation pipeline | ✅ | AT-14 `test_same_seed_gives_identical_metrics`; CI smoke run on synthetic sample |
+| Docker Compose local run | ✅ | AT-17: fresh clone, `docker compose up -d --build --wait`, `demo-seed` twice (second run adds nothing), 15-step click-through via nginx; same steps in the CI `docker` job |
+| Tests, API docs, screenshots, README | ✅ | 209 tests; OpenAPI at `/docs`; 13 screenshots in docs/screenshots (`npm run screenshots`); README Docker quick start |
+
+## Backend
+| Req | Status | Verified by |
+|---|---|---|
+| Versioned REST API (/api/v1) | ✅ | All routes under /api/v1; OpenAPI at /docs (live smoke test) |
+| Alembic migrations, FKs, constraints, indexes | ✅ | AT-01 `test_migrations_downgrade_and_upgrade_cleanly`; `alembic check` reports no drift |
+| Pagination, validation, consistent errors | ✅ | AT-07 `test_search_filters_and_sorting`, `test_search_pagination_totals`, `test_validation_errors_list_fields` |
+| Duplicate-safe imports | ✅ | AT-05 `test_reimporting_same_file_inserts_nothing`, `test_same_external_id_twice_in_one_request` |
+| Clear error when model artifact missing | ✅ | AT-08 `test_scoring_without_a_model_is_503_with_instructions`, `test_tampered_artifact_is_refused` |
+| Auth + RBAC enforced server-side, password hashing | ✅ | AT-03, AT-04: `test_auth.py`, `test_users_rbac.py` |
+
+## ML
+| Req | Status | Verified by |
+|---|---|---|
+| PaySim instructions (no auto-download) | ✅ | README 'Getting PaySim'; nothing downloads data |
+| Data inspection: imbalance, missing values, limitations, leakage | ✅ | docs/DATA_INSPECTION.md (PaySim run) |
+| Baseline + improved model | ✅ | Logistic regression vs gradient boosting on PaySim, three feature sets (docs/MODEL_REPORT.md) |
+| Chronological evaluation, train-only preprocessing | ✅ | `test_split_is_chronological...`, `test_models_are_fitted_on_training_rows_only`, `test_scaler_statistics_come_from_training_rows`, `test_history_counts_only_see_strictly_earlier_steps` |
+| P/R/F1, PR-AUC, confusion matrix, FP workload, thresholds | ✅ | AT-15: docs/MODEL_REPORT.md and docs/model-reports/ |
+| Model version and methodology recorded | ✅ | `metadata.json` (version, hashes, split, methodology, library versions) |
+
+## Frontend
+| Req | Status | Verified by |
+|---|---|---|
+| Overview metrics + risk distribution | ✅ | `/metrics/overview`, `/metrics/risk-distribution` (counts checked against the DB in `test_audit_and_metrics.py`); Overview page |
+| Searchable, filterable transactions | ✅ | Transactions page (search, type, amount, risk level, open alert, sort; filters kept in the URL) |
+| Alert queue (priority, status, score, reasons) | ✅ | Alert queue page + `pages.test.tsx` (empty state, default statuses, open case from selection) |
+| Transaction detail + investigation history | ✅ | Transaction page: assessments, alerts, linked cases, "score now" for seniors |
+| Case creation, assignment, notes, status | ✅ | Cases + case detail pages (status, priority, assignee, link/unlink alerts, notes, decision, timeline) |
+| Model evaluation + synthetic-data labels | ✅ | Model page (caveats first, validation/test metrics, workload budgets); synthetic-data banner on every page; labels shown as "synthetic label" |
+| Loading, empty, validation, error states | ✅ | AT-16: shared Loading/Empty/ErrorState components (error shows request ID and retry); tested in `pages.test.tsx` |
+
+## Delivery
+| Req | Status | Verified by |
+|---|---|---|
+| Plan: architecture, schema, API, milestones, deps, risks | ✅ | docs/PLAN.md |
+| GitHub Actions CI | ✅ | `.github/workflows/ci.yml`: backend, ml, frontend and (Phase 6) docker jobs; OpenAPI/TypeScript drift checks |
+| README, architecture diagram, model report, demo script | ✅ | README, docs/ARCHITECTURE.md (Mermaid diagram), docs/MODEL_REPORT.md, docs/DEMO.md (walked through on the Docker stack) |
+| Known limitations, truthful resume bullets | ✅ | docs/LIMITATIONS.md, docs/RESUME.md (each bullet names its source) |
+| No secrets committed (.env ignored, .env.example only) | ✅ | `.gitignore`; app refuses placeholder secret (`test_config.py`) |
+
+## Phase log
+
+| Phase | Date | Result |
+|---|---|---|
+| Planning | 2026-10-11 | docs/PLAN.md, this checklist |
+| 1 Foundation | 2026-10-11 | 36 tests passed on PostgreSQL 16 (local and Docker Compose); ruff check + format clean |
+| 2 Ingestion | 2026-10-11 | 83 tests passed; ruff clean (backend + scripts); 100k-row import in 20 s |
+| 3 ML pipeline | 2026-10-11 | 21 ML tests passed; ruff clean; PaySim inspected and trained (strict + 2 ablations) |
+| 4 Scoring + alerts | 2026-10-12 | 131 backend tests passed; ruff clean; 200,000 PaySim rows imported and scored with the real model |
+| 4 Review fixes | 2026-10-12 | Clean-clone re-check (152 tests, migrations up/down) then code review; fixes in ADR-023 and migration 0003; 143 backend tests passed; ruff clean |
+| 5 Investigations + dashboard | 2026-10-12 | Backend tests on PostgreSQL and 21 ML tests passed; frontend type check, lint, 13 tests and build passed; click-through against 200k PaySim rows clean |
+| 6 Packaging + demo | 2026-10-12 | 169 backend, 21 ML and 14 frontend tests passed; ruff, ESLint, TypeScript clean; Compose stack built from a fresh clone, demo-seed idempotent, 15-step click-through through nginx clean; priority fix (34 critical / 103 high on 200k PaySim rows); dashboard redesign |
+| Extra: admin screens | 2026-10-13 | Imports and Users pages; 19 frontend tests passed; type check, lint and build clean; click-through on the 200k-row database (upload with a bad row, re-upload inserts nothing, score, create user, change role, deactivate, reset password, audit entries) with no console errors |
